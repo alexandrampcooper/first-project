@@ -1,0 +1,630 @@
+---
+title: "Peer Assessment II"
+output:
+  html_document:
+    df_print: paged
+  github_document: null
+---
+
+# Predicting House Price: Final Project
+
+## Background
+
+**As a statistical consultant working for a real estate investment firm, your task is to develop a model to predict the selling price of a given home in Ames, Iowa. Your employer hopes to use this information to help assess whether the asking price of a house is higher or lower than the true value of the house. If the home is undervalued, it may be a good investment for the firm.**
+
+## Training Data and Relevant Packages
+
+```{r load, message = FALSE}
+load("ames_train.Rdata")
+```
+
+```{r packages, message = FALSE}
+library(statsr)
+library(dplyr)
+library(BAS)
+library(MASS)
+library(GGally)
+library(ggplot2)
+library(knitr)
+library(gridExtra)
+```
+
+## Part 1 - Exploratory Data Analysis (EDA)
+
+* * *
+For this analysis I want to discern the most significant predictors of house price. Hence, I'll be looking at the relationship of housing price and other variables related to its location, size, quality and characteristics.
+
+ 
+### 1.1. Setting up Data
+
+```{r epxloring data}
+ames_train%>% str()
+```
+
+
+After looking at thedata, we see that the qualitative variables Overall.Qual and Overall.Cond are defined as integers. For our EDA, we'll want to change these to factors. In addition to this, I want to look at missing data (NAs) that may impact the results of our data.
+
+
+```{r data clean up}
+
+# Cleaning up data
+
+ames_train$Overall.Qual <- factor(ames_train$Overall.Qual,ordered = TRUE)
+ames_train$Overall.Cond <- factor(ames_train$Overall.Cond,ordered = TRUE)
+
+# Observing NAs
+
+sapply(ames_train, function(x) sum(is.na(x)))
+na_count <- colSums(is.na(ames_train))
+head(sort(na_count, decreasing = TRUE), 3)
+```
+
+
+The variables with the greatest amout of NAs are Pool.QCm Misc.Feature, and Ally. Since these are these are not necessary features of a house, a significant number of our observations fall into the NA cateogory. Omitting these NAs would thus skew our data as fundamentally different than houses with such features. Therefore, to conduct our linear analysis I will simply recode the NA values as another category. 
+
+### 1.2. Price Distributions
+
+Since we're looking at the price of the house. Let's start by discerning the pricing distribtuion. 
+
+
+```{r pricing distribution }
+
+#price distributions 
+
+ames_train%>% summarise(mean = mean(ames_train$price), median = median(ames_train$price),
+                        min = min(ames_train$price), max = max(ames_train$price), 
+                        IQR = IQR(ames_train$price))
+# visualization 
+
+ggplot(ames_train, aes(x = price)) + geom_histogram(fill= "Dark Green")
+
+```
+
+
+The price of houses is right-skewed with the median house price being 159,467, the most expensive, 615,000, the least expensive, 12,789. 
+
+
+### 1.3. Price vs Location 
+
+I'll start by looking at the relationship of a housing prices and neighborhoods. That is, the distribution of housing prices across the neighborhoods. 
+
+
+```{r neighborhood vs price}
+ggplot(data = ames_train, aes(x = Neighborhood, y = price)) + geom_boxplot(fill = "#99D8C9") + 
+  labs(title = "Neighborhood Housing Prices", x = "Neighborhood", y= "Price") + 
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+
+From our graph, the neighborhood with the highest average housing prices appears to be StonerBr and that with the lowest is MeadowV. The neighborhoods with the greatest standard deviation are NridgHt and StonerBr. 
+
+
+```{r Price range}
+
+Price_range <- ames_train%>% group_by(Neighborhood)%>%
+  summarise(median = median(price), sd = sd(price))
+
+Most_expensive <- Price_range[which(Price_range$median == max(Price_range$median)),]
+Most_expensive
+Least_expensive <- Price_range[which(Price_range$median == min(Price_range$median)),]
+Least_expensive
+Most_heterogeneous <-Price_range[which(Price_range$sd == max(Price_range$sd)),]
+Most_heterogeneous
+
+```
+
+
+Our findings demonstrate that MeadowV is the least expensive neighborhood, with a median house price of 85,750, and StonerBr is both the most expensive and most heterogeneous neighborhood with a median house price of 340,692 and a standard deviation of 123,459. This corrobates our previous findings, as the average house of MeadowV being 73,717 under the overall average. In comparison, the median housing price in StonerBr is 181,225 higher than the overall average. 
+
+
+
+### 1.4. Price vs Size 
+
+Next I want to look at the relationship between price and size. I'll look at Lot.Area and area as determinents of size. I'll look at the log transformation of Lot.Area, area and price to better discern the relationship. 
+
+```{r size vs price}
+p1 <- ggplot(ames_train, aes(x = log(Lot.Area), y = log(price))) + geom_point() +stat_smooth(method = 'lm')
+
+p2 <- ggplot(ames_train, aes(x = log(area), y = log(price))) + geom_point() +stat_smooth(method = 'lm')
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+I can discern a strong positive relationship between log(area) and log(price). As the size of the house increases, so does its price. This positive relationship is discernable between log(Lot.Area) log(price) however this it is less strong. After a log(area) of 10, around 25000 sq ft, there is no apparent difference. Suggesting house area is a slightly better predictor of price than overall lot area. 
+
+
+### 1.5. Price vs Quality 
+
+Let's start by looking at how quality and condition of the house compare with price. 
+
+```{r quality vs price}
+p3 <- ggplot(data = ames_train, aes(x = Overall.Qual, y = log(price))) + geom_jitter()
+p4 <- ggplot(data = ames_train, aes(x = Overall.Cond, y = log(price))) + geom_jitter()
+grid.arrange(p3, p4, ncol = 2)
+
+```
+
+
+The Overall.Qual appears to have a strongly possitive relationship with log(price). Overall.Cond and log(price), on the other hand, have a very weak postive relationship. The majority of houses seem to be in relatively decent condition. Most houses on the market aren't in devastating conditions. Given this, I can assume the quality of the house is a better predictor of price than its than its overall state/condition.
+
+
+Asumming that newer houses tend to be of higher quality, let's start by finding the age distribution of the houses. 
+
+```{r Age distribution}
+# creating age variable
+ames_train$House.Age <- sapply(ames_train$Year.Built, function(x) 2020- x)
+
+# visualization 
+
+ggplot(data = ames_train, aes(x = House.Age)) + geom_histogram(bins = 30, fill= "skyblue", colour="black") +labs(title = "Distribution of House Age", x = "House Age", y = "Number of Houses") + 
+  geom_vline(xintercept=mean(ames_train$House.Age), color="red") + 
+  geom_vline(xintercept=median(ames_train$House.Age), color="green") 
+
+ames_train%>% group_by(House.Age)%>%
+  summarise(count = n()) %>% arrange(desc(count))
+
+# age distribution
+
+Age <- ames_train %>%
+  summarize(Mean = mean(ames_train$House.Age),
+            Median = median(ames_train$House.Age),
+            Sd_age = sd(ames_train$House.Age),
+            IQR = IQR(ames_train$House.Age))
+Age
+
+# Age vs Quality 
+
+ggplot(data=ames_train, aes(x= House.Age, fill= factor(Overall.Qual, levels = rev(levels(Overall.Qual)), labels = c("Very Excellent", "Excellent", "Very Good", "Good", "Above Average", "Average", "Below Average", "Fair", "Poor", "Very Poor")))) + geom_histogram(bins=60, aes(y=..density..)) + labs(title= "House Quality in Relation to Age", x= "Age", y= "Density", fill = "House Quality") + theme(title = element_text(face="bold"))
+```
+
+
+Our findings show that the distribuiton of house age is multimodial and right-skewed. The majority of houses are rather young, around 15 years old. The median house age is around 45 years old and mean, slightly higher, around 48 years old. Comparing house ages with quality ratings, I see that houses under the age of 50 years old range from "Very Excellent" to "Below Average". Houses 50 and over range from "Very Good" to "Very Poor". Younger houses are more likely to be rated higher in quality than older. 
+
+In addition to age, let's I'll look at Year.Remod.Add, assuming that houses more recently renovated will be of higher quality. 
+
+
+```{r Year last remodel}
+# creating year last renovated variable
+
+ames_train$Year.Remod <- sapply(ames_train$Year.Remod.Add, function(x) 2020- x)
+
+# visualization 
+
+ggplot(data = ames_train, aes(x = Year.Remod)) + geom_histogram(bins = 30, fill= "skyblue", colour="black") +labs(title = "Distribution of Years Since Last Remodel", x = "Years", y = "Number of Houses") + 
+  geom_vline(xintercept=mean(ames_train$Year.Remod), color="red") + 
+  geom_vline(xintercept=median(ames_train$Year.Remod), color="green") 
+
+ames_train%>% group_by(Year.Remod)%>%
+  summarise(count = n()) %>% arrange(desc(count))
+
+# year last renovated distributions
+
+Years_lastremodel <- ames_train %>%
+  summarize(Mean = mean(ames_train$Year.Remod),
+            Median = median(ames_train$Year.Remod),
+            Sd = sd(ames_train$Year.Remod),
+            Max = max(ames_train$Year.Remod),
+            Min = min(ames_train$Year.Remod))
+Years_lastremodel
+
+# Renovation vs Quality
+
+ggplot(data=ames_train, aes(x= Year.Remod, fill= factor(Overall.Qual, levels = rev(levels(Overall.Qual)), labels = c("Very Excellent", "Excellent", "Very Good", "Good", "Above Average", "Average", "Below Average", "Fair", "Poor", "Very Poor")))) + geom_histogram(bins=60, aes(y=..density..)) + labs(title= "House Quality in Relation to Latest Renovation", x= "Years Since Last Renovation", y= "Density", fill = "House Quality") + theme(title = element_text(face="bold"))
+```
+
+
+The distribution of years since last reonnovation is multimodual. The median number of years since the last rennocation is around 28 years ago, with the majority of rennovations having occured within less than 20 years or around 70 years. Given the majority of the houses in our population are younger, within fourty years of age, house rennovations are expected to be less common within our sample. That said, old enough houses that have been renovated within the past 40 years tend  tend to range from "Very Excellent" to "Below Average". Whereas older houses that have failed to renovate within the past 40 years are given poorer quality ratings. 
+
+
+```{r age and renovation vs price}
+p5 <- ggplot(data = ames_train, aes(x = House.Age, y = log(price))) + geom_jitter() + stat_smooth(method = 'lm')
+p6 <- ggplot(data = ames_train, aes(x = Year.Remod, y = log(price))) + geom_jitter() + stat_smooth(method = 'lm')
+grid.arrange(p5, p6, ncol = 2)
+```
+
+
+Taken together, the quality of a house is seen to be negatively associated with its age and years since latest rennovation. Lower quality ratings, in turn, translates to lower value-based house prices. 
+
+
+### 1.6. Other Potential Predictors of Price
+
+To supplement our findings, I'll descern other influential factors by looking at variables with with the highest correlation coeficients in relation to price. Correlation coeficients meausure the strength of a relationship between two variables. 
+
+
+```{r Highest correlation with price}
+# highest correlations 
+data.correlation <- as.data.frame(sapply(ames_train, as.numeric))
+correlations = cor(data.correlation, method = "s")
+price_correlations = head(sort(correlations[,'price'], decreasing = TRUE), 10)
+price_correlations
+
+# visualization 
+
+p7 <- ggplot(data = ames_train, aes(x = Full.Bath, y = log(price))) + geom_jitter() + stat_smooth(method = 'lm')
+p8 <- ggplot(data = ames_train, aes(x = X1st.Flr.SF, y = log(price))) + geom_jitter() + stat_smooth(method = 'lm')
+p9 <- ggplot(data = ames_train, aes(x = Foundation, y = log(price))) + geom_jitter() + stat_smooth(method = 'lm')
+p10 <- ggplot(data = ames_train, aes(x = Fireplaces, y = log(price))) + geom_jitter() + stat_smooth(method = 'lm')
+p11 <- ggplot(data = ames_train, aes(x = TotRms.AbvGrd, y = log(price))) + geom_jitter() + stat_smooth(method = 'lm')
+grid.arrange(p7, p8, p9, p10, p11, ncol = 3)
+```
+
+
+From our findings, I can see that Overall.Qual, area, Year.Built , Full.Bath, Year.Remod.Add, X1st.Flr.SF, Foundation, Fireplaces, TotRms.AbvGrd, and Open.Porch.SF have highest correlation to house price. This supplements our findings that size and determinents of quality impact house prices. 
+
+
+
+## Part 2 - Development and assessment of an initial model, following a semi-guided process of analysis
+
+###  2.1 Initial Model
+
+There are numerous factors that affect house price. To construct our inital model I'll pick 10 variables, using what I learned from our EDA. Again, for to better see these relationships I will log-transform price, area and Lot.Area. The variables that will be used are:
+
+**Area:** The larger the area of the house, the greater the price.
+
+**Lot.Area:** The position of the house and its size relation to the size of land will affect its price.
+
+**TotRms.AbvGrd:** The number of rooms in the house, including bedrooms will influence buyers in getting a house. In general, the more rooms, the greater the size of the house, the more expensive the house will be. 
+
+**Overall.Qual:** The quality is an siginifcant reason for why and at what price a person would be a house. 
+
+**House.Age:** Better, more moder amenities accomany newer houses. This contributes to higher quality ratings, which in makes it more likely to be sold at a higher price.
+
+**Year.Remod:** Newly rennovated houses tend to be of better quality, adding price value to the house. 
+**Full.Bath:** Having a full bathroom one or more full bathrooms, increases the houses luxary aspect, making buyers more willing to pay more for it.
+
+**Fireplaces**: In modern houses, fire places are amenities that are not essential. However, similarly to bathrooms, they add to the overall luxary aspect of the house and bring the comfort of heat. Having too many fireplaces in close vicinity to one another however is not only a fire risk but also unpleasant and redunant. Thus, pocession of fireplaces can be seen as a ratio to house size; larger houses have more fireplaces. 
+
+```{r fit_model}
+
+fullmodel <- lm(log(price) ~ log(area) + log(Lot.Area) + TotRms.AbvGrd + Overall.Qual + House.Age + Year.Remod + Full.Bath + Fireplaces, data = ames_train)
+summary(fullmodel)
+
+```
+
+
+The adjusted R-squared of the model comes out as 0.8506 meaning the predictors in the model show a relatively strong relationship with price. 
+
+
+### 2.2 Model Selection
+
+I'll apply backwards model selection to AIC and BIC modeling. I'll then compare these to BAS model selection. 
+
+```{r Frequentist vs Bayesian Model Selection}
+# Backwards Stepwise AIC Model Selection 
+
+AIC.model <- stepAIC(fullmodel)
+AIC.model$anova
+
+# Backwards Stepwise BIC Model Selection
+
+BIC.model <- stepAIC(fullmodel, k = log(nrow(ames_train)))
+BIC.model$anova 
+
+# BAM Model Selection
+
+BAS.model <- bas.lm(log(price) ~ log(area) + log(Lot.Area) + TotRms.AbvGrd + Overall.Qual + House.Age + Year.Remod + Full.Bath + Fireplaces, data = ames_train, prior = "AIC", modelprior=uniform())
+image(BAS.model, rotate = FALSE)
+```
+
+**Initial Model:** (log(price) ~ log(area) + log(Lot.Area) + TotRms.AbvGrd + Overall.Qual + House.Age + Year.Remod + Full.Bath + Fireplaces, data = ames_train)
+summary(fullmodel)
+
+**AIC-Model:** log(price) ~ log(area) + log(Lot.Area) + TotRms.AbvGrd + Overall.Qual + 
+    House.Age + Year.Remod + Full.Bath + Fireplaces
+
+**BIC-Model:** log(price) ~ log(area) + log(Lot.Area) + Overall.Qual + House.Age + 
+    Year.Remod + Fireplaces
+
+After carrying out model selection, the AIC and BIC selection criterion don't generate the exact same model. The AIC model includes all of the given predictors from our initial model. In contrast, the BIC model omits the factors TotRms.AbvGrd and Full.Bath. The BIC model puts greater weight on these additional parameters, and penalizes them more heavily than the AIC model. The BMA modeling, however, agrees with the AIC model. Weighing these models, I'll leave all parameters within the model. 
+
+
+### 2.3 Initial Model Residuals
+
+
+```{r model_resid}
+
+# residual plot
+
+plot(BAS.model, which=1)
+
+# Q-Q plot
+
+test_pred <- predict(BAS.model,ames_train,estimator = "BMA")
+test_resid <- na.omit(ames_train$price - exp(test_pred$fit))
+
+resid_mu <- mean(test_resid, na.rm=TRUE)
+resid_sd <- sd(test_resid, na.rm=TRUE)
+resid_std <- (test_resid - resid_mu)/resid_sd
+par(mfrow=c(1,2))
+qqnorm(resid_std, lty = 2)
+qqline(resid_std)
+
+```
+
+
+Looking at the residuals plot (Residuals vs Fitted), I see that residuals are evenly dispersed around the 0. From this I can discern linearity and constant variability in our model; that is, a relatively linear relationship between our the selected predictors and price, the outcome variable. From the plot however I can discern several significant outliers. These being, houses 428, 276, and 310 have been overpriced. Out probability plot curves slightly up and to the right demonstrating outlier homes that are being overpriced. 
+
+
+### 2.4 Initial Model RMSE
+
+
+```{r model_rmse}
+#rmse training prediction
+
+BAS.model <- bas.lm(log(price) ~ log(area) + log(Lot.Area) + TotRms.AbvGrd + Overall.Qual + House.Age + Year.Remod + Full.Bath + Fireplaces, data = ames_train, prior = "AIC", modelprior=uniform())
+
+pred_BASmodel <- predict(BAS.model,ames_train,estimator = "BMA")
+resid_BASmodel <- na.omit(ames_train$price - exp(pred_BASmodel$fit))
+rmse_BASmodel <- sqrt(mean(resid_BASmodel^2))
+rmse_BASmodel
+```
+
+THE RMSE for BMA model under ames_train is 32,052.73 dollars. 
+
+
+### 2.5 Overfitting 
+
+
+```{r loadtest, message = FALSE}
+load("ames_test.Rdata")
+```
+
+
+
+```{r initmodel_test}
+# Add new variables to test dataset
+ames_test$House.Age <- sapply(ames_test$Year.Built, function(x) 2020- x)
+ames_test$Year.Remod <- sapply(ames_test$Year.Remod.Add, function(x) 2020- x)
+
+# Change to factors
+ames_test$Overall.Qual <- factor(ames_test$Overall.Qual,ordered = TRUE)
+ames_test$Overall.Cond <- factor(ames_test$Overall.Cond,ordered = TRUE)
+
+# rmse test prediction
+pred_test <- predict(BAS.model,ames_test,estimator = "BMA")
+resid_test <- na.omit(ames_test$price - exp(pred_test$fit))
+rmse_test <- sqrt(mean(resid_test^2))
+rmse_test
+
+```
+
+
+The RMSE for BMA model under ames_test is 27,472.81 dollars. The RMSE generated from the test data is slightly lower than that generated from our training data, which was 32,052.73 dollars. Since the model is built on the training data, the RMSE of the training data is expected to be lower. This phenomenon is known as overfitting. Given that in this care I see the opposite effect, that the test predictions are more accurate, I can conclude that the model isn't overfitting the data. Despite their slight difference however the RMSEs are still comparable and indicate relative similar accuracy between the datasets.  
+
+* * *
+
+## Part 3 - Development of a Final Model
+
+### 3.1 Final Model
+
+Since the initial model proved to be reliable, all the parameters within from the previous model will be used again in the final model. In addition to these, I'll be adding the following the following variables:
+
+**Neighborhood:** The location of the house impacts housing value and the price buyers are willing to pay.
+**X1st.Flr.SF**: Similar to total area, we'd expect a postitive relationship between price and area of the first floor of house.
+**Total.Bsmt.SF:** Again, increased overall size, even in storage space, is exepcted to have positive relationsip witexpected with price.
+**Garage.Area:** The area of the garage is increases overall size, which in turn has positive impact on price.
+**Foundation:** The material makeup of a house impacts its overall price. Higher-priced building materials like concrete or brick will result in a more expensive house.
+**Central.Air:** Having central air is a commodity that can increase home price. 
+**Garage.Cars:** Increase in the number of cars expected to be positively associated with price. 
+
+```{r model_playground}
+#Variable selection
+Finalmodel_test <- lm(log(price) ~ log(area) + log(Lot.Area) + TotRms.AbvGrd + Overall.Qual + House.Age + Year.Remod + Full.Bath + Fireplaces + Neighborhood + Foundation + X1st.Flr.SF + Total.Bsmt.SF + Garage.Area + Garage.Cars + Central.Air, data = ames_train)
+summary(Finalmodel_test)
+```
+
+
+The model generates an adjusted R-squared value of 0.8768, which demonstrates a strong relationship between the selected predictors (independent variables) and price (dependent variable). 
+
+
+```{r model selection}
+# Backwards Stepwise AIC Model Selection 
+
+AIC.model.fin <- stepAIC(Finalmodel_test)
+AIC.model.fin$anova
+
+# Backwards Stepwise BIC Model Selection
+
+BIC.model.fin <- stepAIC(Finalmodel_test, k = log(nrow(ames_train)))
+BIC.model.fin$anova 
+
+# BAM Model Selection
+
+BAS.model.fin <- bas.lm(log(price) ~ log(area) + log(Lot.Area) + TotRms.AbvGrd + Overall.Qual + House.Age + Year.Remod + Full.Bath + Fireplaces + Neighborhood + Foundation + X1st.Flr.SF + Total.Bsmt.SF + Garage.Area + Garage.Cars, data = ames_train, prior = "AIC", modelprior=uniform())
+image(BAS.model.fin, rotate = FALSE)
+
+#Final Model
+
+Finalmodel <- stepAIC(Finalmodel_test)
+
+```
+
+**Initial final model** log(price) ~ log(area) + log(Lot.Area) + TotRms.AbvGrd + Overall.Qual + House.Age + Year.Remod + Full.Bath + Fireplaces + Neighborhood + Foundation + X1st.Flr.SF + Total.Bsmt.SF + Garage.Area + Garage.Cars 
+
+**AIC model** - log(price) ~ log(area) + log(Lot.Area) + Overall.Qual + House.Age + 
+  Year.Remod + Full.Bath + Fireplaces + Neighborhood + Total.Bsmt.SF + 
+  Garage.Cars
+
+**BIC.model**- log(price) ~ log(area) + log(Lot.Area) + Overall.Qual + House.Age + 
+  Year.Remod + Full.Bath + Fireplaces + Total.Bsmt.SF + Garage.Cars
+
+The final model after conducting AIC model selection, omitted the variables Foundation, TotRms.AbvGrd, X1st.Flr.SF, and Garage.Area. The BIC model omitted the same variables in addition to the variable Neighborhood. The difference can be attributed to the many levels within the vairable Neighborhood. While some neighborhoods are deemed significant, others are not. These findings are supported in the model generated from Bayeisan model averaging. Given a number of Neighborhoods are signficant, I'll keep the variable in the final model. 
+
+
+
+
+* * *
+
+### 3.2 Transformation
+
+* * *
+
+For the analysis were carried out a natural log transformation on the price, area, and Lot.Area. Transforming price, area and Lot.Area yeilds clearer graphis, making the relationship easier to read and allowing for more acurate assumptions in the regression analysis.In addition, by transforming the scale of Lot.Area, area, and price, I can see slightly less outliers in the regression which translates into a better fit and less predictive error.
+
+```{r model_assess}
+# Area vs Price
+
+p12 <- ggplot(ames_train, aes(x = area, y = price)) + geom_point() + stat_smooth(method = 'lm') + labs(title = "Area vs Price - No Log Transformation", x = "area", y = "price")
+
+p13 <- ggplot(ames_train, aes(x = log(area), y = price)) + geom_point() +stat_smooth(method = 'lm') + labs(title = "Area vs Price - Log Area Transformation", x = "log(area)", y = "price")
+
+p14 <- ggplot(ames_train, aes(x = area, y = log(price))) + geom_point() +stat_smooth(method = 'lm') + labs(title = "Area vs Price - No Log Price Transformation", x = "area", y = "Log(price)")
+
+p15 <- ggplot(ames_train, aes(x = log(area), y = log(price))) + geom_point() + stat_smooth(method = 'lm') + labs(title = "Area vs Price - Both Log Transformation", x = "Log(area)", y = "Log(price)")
+
+# Lot.Area vs Price
+
+p16 <- ggplot(ames_train, aes(x = Lot.Area, y = price)) +
+  geom_point() + stat_smooth(method = 'lm') + labs(title = "Lot.Area vs Price - No Log Transformation", x = "Lot.Area", y = "price")
+
+p17 <- ggplot(ames_train, aes(x = log(Lot.Area), y = price)) + geom_point() + stat_smooth(method = 'lm') + labs(title = "Lot.Area vs Price - Lot.Area Log Transformation", x = "Log(Lot.Area)", y = "price")
+
+p18 <- ggplot(ames_train, aes(x = Lot.Area, y = log(price))) + geom_point() + stat_smooth(method = 'lm') + labs(title = "Lot.Area vs Price - Price Log Transformation", x = "Lot.Area", y = "Log(price)")
+
+p19 <- ggplot(ames_train, aes(x = log(Lot.Area), y = log(price))) + geom_point() + stat_smooth(method = 'lm') + labs(title = "Lot.Area vs Price - Both Log Transformation", x = "Log(Lot.Area)", y = "Log(price)")
+
+grid.arrange(p12, p13, p14, p15, p16, p17, p18, p19, ncol = 4)
+```
+
+
+### 3.3 Variable Interaction
+
+
+
+```{r model_inter}
+ggpairs(ames_train, columns = c("price", "area", "Lot.Area", "Overall.Qual", "House.Age","Year.Remod", "Full.Bath", "Fireplaces", "Total.Bsmt.SF", "Garage.Cars"))
+
+```
+
+To account for variable interaction I use ggpairs function to compare the relationships between our selected variables. Variable interaction is the phenomenon whereby three or more variables are dependent on each other hence having a strong relationship. Here I can see that many of our variables are relavtivly or highly correlated. Given the difficulty in accurately accessing the interaction between specfific variables - if they are not already known or the analysis is designed to explore them - I excluded interaction terms in our analysis. 
+
+
+
+### 3.4 Variable Selection
+
+
+
+We used the function corrplot to check the correlation between predictors and price. Then I have top 14 variables that have strong relationship with price. Also, I will put some assumption about reality factor that may affect the price of a house. When we have all variables we want to analyze, I will perform BIC, AIC and BMA model to see the differences. I then chose the BMA model to perform our analysis. 
+
+
+
+### 3.5 Model Testing
+
+
+
+Testing our inital model on out-of-sample data allowed us to get a better idea of its overall fit. Since our model was created off the training data, there is a risk that tuned specifcally to that given dataset and doesn't accurately interpret the true relationships. This concept is known as overfitting the data. A model can be regarded as overfitting the data when the RMSE of the model under the training dataset is less than the RMSE of the model under the test dataset. In the model, I saw a slight difference in the RMSE values of the test and training data. These values however were still comparable. Moreover, our testing data generated a higher RMSE, suggesting that the data is not being overfitted albeit more data could've been used in the sample. Given this, I could conclude that our model was sufficient. 
+
+
+
+## Part 4 - Final Model Assessment
+
+### 4.1 Final Model Residual
+
+
+```{r resid_final_model}
+
+#residuals plot
+
+plot(Finalmodel)
+
+```
+
+Similar to our first model, the residuals in our final model are evenly dispersed around 0, demonstrating constant variability of the residuals and linearity within the model. That said, I still see significant outliers within the plot. That is, houses 428, 276, and 310, which have been overpriced in our model and a few in the upperleft corner which have been underpriced. The Q-Q plot demonstrates these outliers as it is nearly normal with slightly tails on each end, demonstrating a symmetrical curve with long tails. 
+
+* * *
+
+### 4.2 Final Model RMSE
+
+* * *
+
+```{r rmse_final_model}
+# Extract Predictions
+predict_Finalmodel <- exp(predict(Finalmodel, ames_train))
+
+# Extract Residuals
+resid_Finalmodel <- ames_train$price - predict_Finalmodel
+
+# Calculate RMSE
+rmse_Finalmodel <- sqrt(mean(resid_Finalmodel^2, na.rm=TRUE))
+rmse_Finalmodel
+
+```
+
+
+The RSME of the final model under our training data is 27,413.95. This is less than the RSME value I generated from our inital model, which suggests a better fit.
+
+* * *
+
+### 4.3 Final Model Evaluation
+
+* * *
+**Strengths**
+
+1. The RMSE of the model is relatively low under both the training, testing and validation datasets. Moreover, it's slightly less under the training and validation datasets than under the training data, suggesting that the model is not overfitting the data. 
+
+2. The model exhibits a very high R-squared value and accounts forroughly 98% percent of the 95% predictive confidence intervals containing the true price of the house. Thus, accurately reflecting uncertainty. 
+
+**Weaknessess**
+
+1. The AIC and BIC selection criterion resulted in slightly different models in the process of generating our initial model and our final model. Here, the BIC penalized variables more heavily than the models generated from AIC backwards selection and Bayesian model averageing. This could have slightly compromised the significance of our model. 
+
+2. The RMSE of our model under the test and validation datasets were consistently lower than under the training dataset. In general, it is usually the opposite trend. Although there weren't significant differences between the RMSE values, the results nonethless suggest that more data would be helpful in the analysis and/or that a re-evaluation of the model training methodology is needed.
+
+
+* * *
+
+### 4.4 Final Model Validation
+
+```{r loadvalidation, message = FALSE}
+load("ames_validation.Rdata")
+
+# Add new variables to validate dataset
+ames_validation$House.Age <- sapply(ames_validation$Year.Built, function(x) 2020- x)
+ames_validation$Year.Remod <- sapply(ames_validation$Year.Remod.Add, function(x) 2020- x)
+
+# Change to factors
+ames_validation$Overall.Qual <- factor(ames_validation$Overall.Qual,ordered = TRUE)
+ames_validation$Overall.Cond <- factor(ames_validation$Overall.Cond,ordered = TRUE)
+
+# Extract Predictions
+predict_Finalmodel_val <- exp(predict(Finalmodel, ames_validation))
+
+# Extract Residuals 
+resid_Finalmodel_val <- ames_validation$price - predict_Finalmodel_val
+
+#RMSE validate 
+
+rmse_Finalmodel_val <- sqrt(mean(resid_Finalmodel_val^2, na.rm=TRUE))
+rmse_Finalmodel_val
+
+# percentage of the 95% predictive confidence
+
+predict_price_final <- exp(predict(Finalmodel, ames_validation, interval = "prediction"))
+coverage_prob_final <- mean(ames_validation$price > predict_price_final[,"lwr"] &
+                             ames_validation$price < predict_price_final[,"upr"])
+coverage_prob_final
+
+```
+
+The RMSE of the final model when applied to the validation data is 23,036.51 dollars.Similar to the initial model, the RMSE is less under the validation dataset than under the training, which suggests that our model is not overfitting the data. 
+
+* * *
+
+## Part 5 - Conclusion
+
+
+* * *
+
+In my analysis I employed both Bayesian and Frequentist regression methodolgies on housing data from Ames, Iowa to generate a predicitve model for housing prices in the region. As product, I produced a predicitve model with an adjusted R-squared of 88 and a strong ability to account for uncertainty.
+
+To get familiar with the data,an exploratory data analysis (EDA) was conducted at the start. This entailed drawing preliminary hypotheses on the relationship of price and other provided variables, and then manipulating the data accordingly. In addition to this, the corrplot function to identify variables with the strongest relationship with price.  
+
+The findings from the EDA were used to inform an inital model. This model yielded a high adjusted R-squared. Using AIC and BIC backwards model selection, two different models were yielded. In the BIC model,  full bath and total rooms above ground were omitted. In the AIC model, all predictors remained. Carrying out Bayesian model averaging, the best model included given predictors. Taken together, a model with all predicters was used. Plotting the residuals of the model, several signficant outliers were identified. In line with the model, these outliers - namely houses # 181 310, and 428 - were largely overpriced. Beyond this, the model appeared to be well fit; it exhbited a linearity and constant variability of its residuals. The RMSE of the model under the training data was lower than that under the test data, suggesting fitness of the model and no overfitting of the data.
+
+For the final model, additional variables were added to the inital model. These variables were selected partially off the findings from the EDA and after factoring in real world assumptions. The model similarly yielded a high adjusted R-squared. After carrying out AIC and BIC model selection, the models differed again. Both models omitted the variables Foundation, TotRms.AbvGrd, X1st.Flr.SF, and Garage.Area. Unlike the AIC model however the BIC model also omitted Neighborhood due to several non-signficant levels in the neighborhoods variable. Given the presence of significant levels however we decided to keep this variable in the model. This time, we proceeded with the AIC model. 
+
+Plotting the residuals of the model,the same outliers and similar trend of the residuals was discerned. The RMSE of the final model under the training data proved to be larger than the RMSE value under the validation dataset, demonstrating fitness. Finally, the percentage of the 95% predictive confidence intervals contain the true price of the house in the validation data set came out to be around 98%. 
+
+
+* * *
